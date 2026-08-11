@@ -2,7 +2,7 @@ import React from 'react';
 import { IonApp, IonRouterOutlet, IonTabBar, IonTabButton, IonTabs, IonIcon, IonLabel } from '@ionic/react';
 import { IonReactRouter } from '@ionic/react-router';
 import { Route, Redirect } from 'react-router-dom';
-import { home, explore, person } from 'ionicons/icons';
+import { home, compass, person } from 'ionicons/icons';
 import Home from './pages/Home';
 import Explore from './pages/Explore';
 import Profile from './pages/Profile';
@@ -22,7 +22,7 @@ const App: React.FC = () => (
             <IonIcon icon={home} /><IonLabel>Home</IonLabel>
           </IonTabButton>
           <IonTabButton tab="explore" href="/explore">
-            <IonIcon icon={explore} /><IonLabel>Explore</IonLabel>
+            <IonIcon icon={compass} /><IonLabel>Explore</IonLabel>
           </IonTabButton>
           <IonTabButton tab="profile" href="/profile">
             <IonIcon icon={person} /><IonLabel>Profile</IonLabel>
