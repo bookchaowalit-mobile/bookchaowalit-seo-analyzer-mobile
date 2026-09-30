@@ -28,19 +28,35 @@ export interface SeoReport {
   };
 }
 
+const NAMED: Record<string, string> = { nbsp: ' ', amp: '&', lt: '<', gt: '>', quot: '"', apos: "'" };
+
+/**
+ * Decodes common named and numeric entities in ONE pass, so `&amp;lt;` stays
+ * the literal text `&lt;` instead of being decoded twice into `<`.
+ */
 const decode = (s: string) =>
-  s
-    .replace(/&nbsp;/gi, ' ')
-    .replace(/&amp;/gi, '&')
-    .replace(/&lt;/gi, '<')
-    .replace(/&gt;/gi, '>')
-    .replace(/&quot;/gi, '"')
-    .replace(/&#39;|&apos;/gi, "'");
+  s.replace(/&(?:#(\d{1,7})|#x([0-9a-f]{1,6})|([a-z]+));/gi, (whole, dec?: string, hex?: string, name?: string) => {
+    if (name !== undefined) return NAMED[name.toLowerCase()] ?? whole;
+    const cp = dec !== undefined ? Number(dec) : parseInt(hex ?? '', 16);
+    return cp > 0 && cp <= 0x10ffff && (cp < 0xd800 || cp > 0xdfff) ? String.fromCodePoint(cp) : '\uFFFD';
+  });
+
+/** Length in user-perceived characters (an emoji or a letter+accent pair counts once). */
+export function charLength(s: string): number {
+  if (typeof Intl !== 'undefined' && 'Segmenter' in Intl) {
+    return Array.from(new Intl.Segmenter(undefined, { granularity: 'grapheme' }).segment(s)).length;
+  }
+  return [...s].length;
+}
+
+/** Scripts written without spaces between words (Thai, Lao, Khmer, Myanmar, CJK). */
+const NO_SPACE_SCRIPT = /[\p{Script=Thai}\p{Script=Lao}\p{Script=Khmer}\p{Script=Myanmar}\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}]/u;
 
 const clean = (s: string) => decode(s).replace(/\s+/g, ' ').trim();
 
 function attr(tag: string, name: string): string | null {
-  const m = new RegExp(`\\s${name}\\s*=\\s*("([^"]*)"|'([^']*)'|([^\\s>]+))`, 'i').exec(tag);
+  // The value is optional: a bare `<img alt>` is the same as `alt=""` (decorative image).
+  const m = new RegExp(`\\s${name}(?:\\s*=\\s*("([^"]*)"|'([^']*)'|([^\\s>]+)))?(?=[\\s/>]|$)`, 'i').exec(tag);
   return m ? (m[2] ?? m[3] ?? m[4] ?? '') : null;
 }
 
@@ -63,7 +79,17 @@ export function visibleText(html: string): string {
 }
 
 export function countWords(text: string): number {
-  return text.split(/\s+/).filter((w) => /[\p{L}\p{N}]/u.test(w)).length;
+  const segmenter =
+    typeof Intl !== 'undefined' && 'Segmenter' in Intl ? new Intl.Segmenter(undefined, { granularity: 'word' }) : null;
+  let n = 0;
+  for (const chunk of text.split(/\s+/)) {
+    if (!/[\p{L}\p{N}]/u.test(chunk)) continue;
+    // A Thai/CJK sentence is one space-free chunk; count its words, not the chunk.
+    if (segmenter && NO_SPACE_SCRIPT.test(chunk)) {
+      for (const seg of segmenter.segment(chunk)) if (seg.isWordLike) n++;
+    } else n++;
+  }
+  return n;
 }
 
 /** Whole-phrase, case-insensitive occurrences of `keyword` in `text`. */
@@ -71,6 +97,8 @@ export function countKeyword(text: string, keyword: string): number {
   const k = keyword.trim().toLowerCase();
   if (!k) return 0;
   const escaped = k.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/\s+/g, '\\s+');
+  // Thai/CJK words touch their neighbours, so a word-boundary match would never hit.
+  if (NO_SPACE_SCRIPT.test(k)) return (text.toLowerCase().match(new RegExp(escaped, 'gu')) ?? []).length;
   return (text.toLowerCase().match(new RegExp(`(?<![\\p{L}\\p{N}])${escaped}(?![\\p{L}\\p{N}])`, 'gu')) ?? []).length;
 }
 
@@ -97,13 +125,14 @@ export function analyze(html: string, keyword = ''): SeoReport {
   const add = (id: string, label: string, status: CheckStatus, detail: string) => checks.push({ id, label, status, detail });
 
   if (!title) add('title', 'Title tag', 'fail', 'Missing <title>.');
-  else if (title.length < 30 || title.length > 60) add('title', 'Title tag', 'warn', `${title.length} characters; aim for 30-60.`);
-  else add('title', 'Title tag', 'pass', `${title.length} characters.`);
+  else if (charLength(title) < 30 || charLength(title) > 60)
+    add('title', 'Title tag', 'warn', `${charLength(title)} characters; aim for 30-60.`);
+  else add('title', 'Title tag', 'pass', `${charLength(title)} characters.`);
 
   if (!description) add('description', 'Meta description', 'fail', 'Missing meta description.');
-  else if (description.length < 70 || description.length > 160)
-    add('description', 'Meta description', 'warn', `${description.length} characters; aim for 70-160.`);
-  else add('description', 'Meta description', 'pass', `${description.length} characters.`);
+  else if (charLength(description) < 70 || charLength(description) > 160)
+    add('description', 'Meta description', 'warn', `${charLength(description)} characters; aim for 70-160.`);
+  else add('description', 'Meta description', 'pass', `${charLength(description)} characters.`);
 
   if (h1Count === 1) add('h1', 'Single H1', 'pass', 'Exactly one <h1>.');
   else add('h1', 'Single H1', h1Count === 0 ? 'fail' : 'warn', `${h1Count} <h1> elements found.`);
@@ -127,9 +156,11 @@ export function analyze(html: string, keyword = ''): SeoReport {
   if (keyword.trim()) {
     const inTitle = countKeyword(title ?? '', keyword) > 0;
     add('kw-title', 'Keyword in title', inTitle ? 'pass' : 'warn', inTitle ? 'Found.' : `"${keyword.trim()}" not in title.`);
-    const pct = keywordDensity * 100;
-    const status: CheckStatus = keywordCount === 0 ? 'fail' : pct > 3 ? 'warn' : 'pass';
-    add('kw-density', 'Keyword density', status, `${pct.toFixed(1)}% of words (${keywordCount} uses)${pct > 3 ? '; may read as stuffing' : ''}.`);
+    // Judge the same rounded figure we display, so "3.0%" is never flagged as over 3%.
+    const pct = Math.round(keywordDensity * 1000) / 10;
+    const stuffed = pct > 3;
+    const status: CheckStatus = keywordCount === 0 ? 'fail' : stuffed ? 'warn' : 'pass';
+    add('kw-density', 'Keyword density', status, `${pct.toFixed(1)}% of words (${keywordCount} uses)${stuffed ? '; may read as stuffing' : ''}.`);
   }
 
   const score = Math.round((checks.reduce((n, c) => n + WEIGHT[c.status], 0) / checks.length) * 100);

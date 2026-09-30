@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { analyze, countKeyword, countWords, visibleText } from './seo';
+import { analyze, charLength, countKeyword, countWords, visibleText } from './seo';
 
 const words = (n: number, w = 'lorem') => Array.from({ length: n }, () => w).join(' ');
 
@@ -77,5 +77,36 @@ describe('analyze', () => {
     const report = analyze(`<html lang=th><head><meta name='description' content='${'d'.repeat(80)}'></head><body></body></html>`);
     expect(report.stats.description).toHaveLength(80);
     expect(report.checks.find((c) => c.id === 'lang')!.detail).toBe('lang="th"');
+  });
+});
+
+describe('pass 3 edge cases', () => {
+  const page = (head: string, body = '<h1>x</h1>') => `<html lang="en"><head>${head}</head><body>${body}</body></html>`;
+  const check = (html: string, id: string, keyword = '') => analyze(html, keyword).checks.find((c) => c.id === id)!;
+
+  it('decodes entities once: &amp;lt; is the text "&lt;", not "<"', () => {
+    expect(analyze(page('<title>a &amp;lt; b</title>')).stats.title).toBe('a &lt; b');
+    expect(analyze(page('<title>Tom &#8212; &#x1F680; &eacute;</title>')).stats.title).toBe('Tom \u2014 \u{1F680} &eacute;');
+  });
+  it('counts title length in visible characters, not UTF-16 units', () => {
+    expect(charLength('🚀👍🏽é')).toBe(3);
+    const title = 'Launch day 🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀🚀';
+    expect(charLength(title)).toBe(49);
+    expect(check(page(`<title>${title}</title>`), 'title').status).toBe('pass');
+  });
+  it('counts Thai words and finds Thai keywords inside unspaced text', () => {
+    expect(countWords('สวัสดีครับวันนี้อากาศดีมาก')).toBeGreaterThan(4);
+    expect(countKeyword('วันนี้อากาศดีมาก อากาศเย็น', 'อากาศ')).toBe(2);
+    expect(countKeyword('cat catalog', 'cat')).toBe(1);
+  });
+  it('does not flag a density shown as 3.0% as keyword stuffing', () => {
+    // 3 uses in 99 words = 3.03% -> displayed 3.0%.
+    const words = Array.from({ length: 96 }, (_, i) => `w${i}`).join(' ');
+    const d = check(page('<title>t</title>', `<p>seo seo seo ${words}</p>`), 'kw-density', 'seo');
+    expect(d.detail).toMatch(/^3\.0%/);
+    expect(d.status).toBe('pass');
+  });
+  it('treats a bare alt attribute as present', () => {
+    expect(analyze(page('', '<img src="a.png" alt><img src="b.png" data-alt="x">')).stats.imagesMissingAlt).toBe(1);
   });
 });

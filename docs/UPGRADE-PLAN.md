@@ -31,3 +31,19 @@ Score: 6/10 (was 5/10) — reports can be shared/copied, recent analyses are kep
 - Component tests: `src/pages/__tests__/Home.test.tsx` (Vitest + jsdom + @testing-library/react) — analyze + history, clipboard fallback, clear. 13 tests total.
 - Advisories: `npm audit --omit=dev` is clean; dev-only vite 5/esbuild/vitest findings need major upgrades.
 - Verified: typecheck, lint, vitest, `npm run build`.
+
+## Done in this pass (pass 3)
+
+Score: 7/10 (was 6/10) — edge-case hunt in `src/lib/seo.ts` found five real bugs.
+
+- Bug: entities were decoded in several passes, so `&amp;lt;` became `<`; numeric entities
+  (`&#8212;`, `&#x1F680;`) were not decoded at all and inflated title length. Now one pass, named + numeric.
+- Bug: title/description lengths counted UTF-16 units (an emoji counted 2, a skin-tone emoji 4);
+  now counted in graphemes (`charLength`, `Intl.Segmenter` with a code-point fallback).
+- Bug: Thai/CJK pages counted a whole sentence as one word (false "Content length" warning), and a Thai
+  keyword never matched inside unspaced text; word counting now segments those scripts.
+- Bug: keyword density shown as "3.0%" could still be flagged "may read as stuffing" (3.03% > 3);
+  the check now judges the displayed rounded value.
+- Bug: a bare `<img alt>` (valid decorative image) was reported as missing alt.
+- `tsconfig` adds the `ES2022.Intl` lib for `Intl.Segmenter` types (runtime is feature-detected).
+- Verified: typecheck, lint, vitest, build; the 5 new regression tests fail on the previous code.
