@@ -14,8 +14,24 @@ import {
   IonTitle,
   IonToolbar,
 } from '@ionic/react';
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
+import {
+  type HistoryEntry,
+  HISTORY_KEY,
+  addHistory,
+  formatReport,
+  parseHistory,
+  toHistoryEntry,
+} from '../lib/history';
 import { type CheckStatus, type SeoReport, analyze } from '../lib/seo';
+
+function loadHistory(): HistoryEntry[] {
+  try {
+    return parseHistory(localStorage.getItem(HISTORY_KEY));
+  } catch {
+    return [];
+  }
+}
 
 const EXAMPLE = `<html lang="en">
 <head>
@@ -36,8 +52,39 @@ const Home: React.FC = () => {
   const [html, setHtml] = useState(EXAMPLE);
   const [keyword, setKeyword] = useState('');
   const [report, setReport] = useState<SeoReport | null>(null);
+  const [history, setHistory] = useState<HistoryEntry[]>(loadHistory);
+  const [shareStatus, setShareStatus] = useState<string | null>(null);
 
-  const run = () => setReport(analyze(html, keyword));
+  useEffect(() => {
+    try {
+      localStorage.setItem(HISTORY_KEY, JSON.stringify(history));
+    } catch {
+      // Storage unavailable (private mode): keep history in memory only.
+    }
+  }, [history]);
+
+  const run = () => {
+    const next = analyze(html, keyword);
+    setReport(next);
+    setShareStatus(null);
+    setHistory((list) => addHistory(list, toHistoryEntry(next, keyword, Date.now())));
+  };
+
+  const exportReport = async () => {
+    if (!report) return;
+    const text = formatReport(report, keyword);
+    try {
+      if (typeof navigator.share === 'function') {
+        await navigator.share({ title: 'SEO report', text });
+        setShareStatus('Report shared.');
+      } else {
+        await navigator.clipboard.writeText(text);
+        setShareStatus('Report copied to the clipboard.');
+      }
+    } catch {
+      setShareStatus('Could not share or copy the report.');
+    }
+  };
 
   return (
     <IonPage>
@@ -82,6 +129,14 @@ const Home: React.FC = () => {
                 {report.stats.wordCount} words · {report.stats.h1Count} H1 · {report.stats.imagesMissingAlt} images missing alt
               </IonNote>
             </p>
+            <IonButton expand="block" fill="outline" onClick={exportReport}>
+              Share / copy report
+            </IonButton>
+            {shareStatus && (
+              <p className="ion-text-center" role="status">
+                <IonNote>{shareStatus}</IonNote>
+              </p>
+            )}
             <IonList>
               <IonListHeader>
                 <IonLabel>Checks</IonLabel>
@@ -100,6 +155,32 @@ const Home: React.FC = () => {
             </IonList>
           </section>
         )}
+
+        {history.length > 0 && (
+          <IonList>
+            <IonListHeader>
+              <IonLabel>Recent analyses</IonLabel>
+              <IonButton aria-label="Clear analysis history" onClick={() => setHistory([])}>
+                Clear
+              </IonButton>
+            </IonListHeader>
+            {history.map((h) => (
+              <IonItem key={h.id}>
+                <IonLabel className="ion-text-wrap">
+                  <h3>{h.title ?? '(no title)'}</h3>
+                  <p>
+                    {new Date(h.at).toLocaleString()} · {h.wordCount} words · {h.failed} failed
+                    {h.keyword && ` · "${h.keyword}"`}
+                  </p>
+                </IonLabel>
+                <IonBadge color={scoreColor(h.score)} slot="end">
+                  {h.score}
+                </IonBadge>
+              </IonItem>
+            ))}
+          </IonList>
+        )}
+
       </IonContent>
     </IonPage>
   );
